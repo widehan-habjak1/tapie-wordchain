@@ -1,342 +1,175 @@
-import { useEffect, useRef, useState } from "react"
-import logo from "./assets/tapie_mylogo.png"
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import WordInput from "./WordInput"
 import WordList from "./WordList"
-import { getRandomComputerWord } from "./utils/ComputerOpponent"
-import { getAllowedInitials, isValidWord, isWordInDictionary } from "./utils/WordChain"
+import RankingList from "./RankingList"
+import ResultScreen from "./ResultScreen"
+import { getTurnDurationMs, getWordPoints, type RankingEntry } from "../shared/game"
+import { createLocalRun, finishLocalRun, submitLocalWord, runVersion, RULES_VERSION, type LocalRun } from "../shared/run"
+import { getAllowedInitials } from "./utils/WordChain"
+import { connectionState, loadLocalEngine, persistRun, prepareOfflineShell, queueRanking, registrationFor, restoreRun, setLocalMode, syncRankings } from "./utils/Offline"
+import type { WordEngine } from "../worker/engine"
 
-type GameMode = "deathmatch" | "timeAttack"
+const Arrow = () => <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6" /></svg>
 
 const App = () => {
+  const [run, setRun] = useState<LocalRun | null>(restoreRun)
+  const [clock, setClock] = useState(Date.now)
+  const [pending, setPending] = useState(false)
+  const [ready, setReady] = useState(false)
+  const [dictionaryLoading, setDictionaryLoading] = useState(true)
+  const [offlineReady, setOfflineReady] = useState(false)
+  const [connection, setConnection] = useState(connectionState)
   const [error, setError] = useState("")
-  const [words, setWords] = useState<string[]>([])
-  const [isFinished, setIsFinished] = useState(false)
-  const [winner, setWinner] = useState<number | null>(null)
-  const [inputResetKey, setInputResetKey] = useState(0)
-  const [mode, setMode] = useState<GameMode | null>(null)
-  const [isModeDialogOpen, setIsModeDialogOpen] = useState(false)
-  const [remainingMs, setRemainingMs] = useState(3000)
-  const [turnTimerKey, setTurnTimerKey] = useState(0)
-  const [speechMessage, setSpeechMessage] = useState("")
-  const gameSessionRef = useRef(0)
-  const currentPlayer = words.length % 2
-  const isComputerTurn = currentPlayer === 1 && !isFinished && mode !== null
-  const lastWord = words[words.length - 1]
-  const requiredLetter = lastWord?.[lastWord.length - 1]
+  const [registered, setRegistered] = useState<RankingEntry | null>(null)
+  const [nickname, setNickname] = useState(() => { try { return localStorage.getItem("wordchain-nickname") || "" } catch { return "" } })
+  const [phone, setPhone] = useState("")
+  const rulesRef = useRef<HTMLDialogElement>(null)
+  const engineRef = useRef<WordEngine | null>(null)
+  const engineVersionRef = useRef<number | null>(null)
+  const runRef = useRef(run)
+  const generation = useRef(0)
+  const data = run?.game
+  const game = run
+  const words = data?.words ?? []
+  const lastWord = words.at(-1)
+  const requiredLetter = lastWord?.at(-1)
   const allowedInitials = requiredLetter ? getAllowedInitials(requiredLetter) : []
-
-  useEffect(() => () => window.speechSynthesis?.cancel(), [])
-
-  useEffect(() => {
-    if (mode !== "timeAttack" || isFinished) return
-
-    const deadline = Date.now() + 3000
-    const intervalId = window.setInterval(() => {
-      const nextRemainingMs = Math.max(0, deadline - Date.now())
-      setRemainingMs(nextRemainingMs)
-      if (nextRemainingMs === 0) {
-        gameSessionRef.current += 1
-        setWinner(1 - currentPlayer)
-        setError(currentPlayer === 0 ? "시간 초과! 테이피가 이겼어요." : "시간 초과! 테이피가 제시간에 답하지 못했어요.")
-        setIsFinished(true)
-      }
-    }, 50)
-
-    return () => window.clearInterval(intervalId)
-  }, [currentPlayer, isFinished, mode, turnTimerKey, words.length])
+  const remainingMs = run ? Math.max(0, data!.turnDurationMs - Math.max(run.lastElapsedMs, clock - run.turnStartedAt)) : 12000
+  const isFinished = data?.status === "finished"
+  const lastAttempt = run?.attempts.at(-1)
+  const breakdown = data && data.lastGain > 0 && lastAttempt ? getWordPoints(lastAttempt.word, getTurnDurationMs(data.rounds - 1) - lastAttempt.elapsedMs, data.streak - 1) : null
 
   useEffect(() => {
-    if (!isComputerTurn) return
+    let cancelled = false
+    const version = runVersion(runRef.current)
+    const initialGeneration = generation.current
+    void loadLocalEngine(version).then((engine) => { if (!cancelled && generation.current === initialGeneration) { engineRef.current = engine; engineVersionRef.current = version; setReady(true) } }).catch((cause) => { if (!cancelled && generation.current === initialGeneration) setError(cause instanceof Error ? cause.message : "사전 준비에 실패했어요. 다시 준비해 주세요.") }).finally(() => { if (!cancelled) setDictionaryLoading(false) })
+    void prepareOfflineShell().then((saved) => { if (!cancelled) setOfflineReady(saved) }).catch(() => { /* The dictionary still supports this open page offline. */ })
+    const update = () => setConnection(connectionState())
+    const reconnect = () => { void syncRankings() }
+    const offline = () => setConnection({ ...connectionState(), connected: false })
+    window.addEventListener("wordchain-sync", update)
+    window.addEventListener("online", reconnect)
+    window.addEventListener("offline", offline)
+    const timer = window.setInterval(reconnect, 30000)
+    reconnect()
+    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("wordchain-sync", update); window.removeEventListener("online", reconnect); window.removeEventListener("offline", offline); window.speechSynthesis?.cancel() }
+  }, [])
 
-    let isCancelled = false
-    const timeoutId = window.setTimeout(() => {
-      void getRandomComputerWord(lastWord, words)
-        .then((computerWord) => {
-          if (isCancelled) return
-          if (!computerWord) {
-            gameSessionRef.current += 1
-            setWinner(0)
-            setError("테이피가 이어갈 단어를 찾지 못했어요.")
-            setIsFinished(true)
-            return
-          }
+  useEffect(() => {
+    if (!data || !isFinished) return
+    let cancelled = false
+    const update = () => { void registrationFor(data.id).then((entry) => { if (!cancelled) setRegistered(entry) }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "기록 저장 공간을 확인해 주세요.") }) }
+    update()
+    window.addEventListener("wordchain-sync", update)
+    return () => { cancelled = true; window.removeEventListener("wordchain-sync", update) }
+  }, [data, isFinished])
 
-          setError("")
-          setRemainingMs(3000)
-          setWords((currentWords) => [...currentWords, computerWord])
-        })
-        .catch(() => {
-          if (isCancelled) return
-          gameSessionRef.current += 1
-          setWinner(null)
-          setError("단어 사전에 연결할 수 없어요. 서버를 확인해 주세요.")
-          setIsFinished(true)
-        })
-    }, 900)
+  const commitRun = useCallback((next: LocalRun | null) => {
+    runRef.current = next
+    persistRun(next)
+    setRun(next)
+    setClock(Date.now())
+  }, [])
 
-    return () => {
-      isCancelled = true
-      window.clearTimeout(timeoutId)
-    }
-  }, [isComputerTurn, lastWord, words])
-
-  const handleSubmit = async (word: string) => {
-    const prev = words[words.length - 1]
-    const result = isValidWord(prev, word, words)
-    if (result) {
-      setError(result)
-      return false
-    }
-
-    const session = gameSessionRef.current
-    const normalizedWord = word.normalize("NFC")
-    try {
-      const existsInDictionary = await isWordInDictionary(normalizedWord)
-      if (session !== gameSessionRef.current) return false
-      if (!existsInDictionary) {
-        setError("사전에 없는 단어예요. 다른 단어를 입력해 주세요.")
-        return false
+  const reset = () => { generation.current++; setError(""); setRegistered(null); setPhone(""); setPending(false); window.speechSynthesis?.cancel() }
+  const startGame = async () => {
+    reset()
+    const current = generation.current
+    if (!engineRef.current || engineVersionRef.current !== RULES_VERSION) {
+      setPending(true)
+      try {
+        const engine = await loadLocalEngine()
+        if (current !== generation.current) return
+        engineRef.current = engine; engineVersionRef.current = RULES_VERSION; setReady(true)
       }
-    } catch {
-      if (session !== gameSessionRef.current) return false
-      setError("단어 사전에 연결할 수 없어요. 다시 시도해 주세요.")
-      return false
+      catch (cause) { if (current === generation.current) setError(cause instanceof Error ? cause.message : "사전 준비에 실패했어요. 다시 준비해 주세요."); return }
+      finally { if (current === generation.current) setPending(false) }
     }
-
+    if (current === generation.current) commitRun(createLocalRun(crypto.randomUUID(), Date.now()))
+  }
+  const goHome = () => { reset(); commitRun(null) }
+  const finishGame = useCallback((reason: "timeout" | "forfeit") => {
+    const current = runRef.current
+    if (!current || current.game.status === "finished") return
+    commitRun(finishLocalRun(current, reason, Date.now() - current.turnStartedAt))
     setError("")
-    setRemainingMs(3000)
-    setWords([...words, normalizedWord])
-    return true
+  }, [commitRun])
+
+  useEffect(() => {
+    if (!run || isFinished) return
+    const interval = window.setInterval(() => setClock(Date.now()), 50)
+    return () => window.clearInterval(interval)
+  }, [run, isFinished])
+  useEffect(() => {
+    if (!run || isFinished || remainingMs > 0) return
+    const timer = window.setTimeout(() => finishGame("timeout"), 0)
+    return () => window.clearTimeout(timer)
+  }, [run, isFinished, remainingMs, finishGame])
+
+  const handleSubmit = (text: string) => {
+    const current = runRef.current
+    if (!current || current.game.status === "finished" || !engineRef.current) return false
+    if (current.attempts.length >= 2000) { finishGame("forfeit"); return false }
+    const result = submitLocalWord(current, text, Date.now() - current.turnStartedAt, engineRef.current)
+    commitRun(result.run)
+    setError(result.error || "")
+    return !result.error
   }
 
-  const startNewGame = (selectedMode: GameMode) => {
-    setMode(selectedMode)
-    resetGame()
-    setIsModeDialogOpen(false)
-  }
-
-  const resetGame = () => {
-    window.speechSynthesis?.cancel()
-    gameSessionRef.current += 1
-    setWords([])
-    setError("")
-    setIsFinished(false)
-    setWinner(null)
-    setRemainingMs(3000)
-    setSpeechMessage("")
-    setTurnTimerKey((key) => key + 1)
-    setInputResetKey((key) => key + 1)
-  }
-
-  const restartGame = () => {
-    if (mode) {
-      resetGame()
-      return
-    }
-    setIsModeDialogOpen(true)
-  }
-
-  const openModeDialog = () => setIsModeDialogOpen(true)
-
-  const goHome = (event: React.MouseEvent<HTMLAnchorElement>) => {
+  const registerRanking = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setIsModeDialogOpen(false)
-    setMode(null)
-    resetGame()
-  }
-
-  const finishByForfeit = () => {
-    gameSessionRef.current += 1
-    setWinner(1)
-    setError("기권했어요. 테이피가 이겼어요.")
-    setIsFinished(true)
-    setInputResetKey((key) => key + 1)
+    if (!run || pending || registered) return
+    const current = generation.current
+    setPending(true)
+    setError("")
+    try {
+      const entry = await queueRanking(run, nickname, phone)
+      if (current === generation.current) { setRegistered(entry); setPhone("") }
+    } catch (cause) {
+      if (current === generation.current) setError(cause instanceof Error ? cause.message : "기기에 기록을 저장하지 못했어요.")
+    } finally { if (current === generation.current) setPending(false) }
   }
 
   const readLastWord = () => {
     if (!lastWord) return
-    if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
-      setSpeechMessage("이 브라우저에서는 음성 읽기를 지원하지 않아요.")
-      return
-    }
-
+    if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) { setError("이 브라우저는 단어 읽기를 지원하지 않아요."); return }
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(lastWord)
     utterance.lang = "ko-KR"
-    utterance.rate = 0.9
-    const koreanVoice = window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("ko"))
-    if (koreanVoice) utterance.voice = koreanVoice
-    utterance.onstart = () => setSpeechMessage(`‘${lastWord}’ 단어를 읽고 있어요.`)
-    utterance.onend = () => setSpeechMessage("")
-    utterance.onerror = () => setSpeechMessage("단어를 읽지 못했어요. 다시 시도해 주세요.")
+    utterance.rate = .9
     window.speechSynthesis.speak(utterance)
   }
 
-  return (
-    <div className="app-shell">
-      <header className="site-header">
-        <a className="brand" href="#top" onClick={goHome} aria-label="테이피 끝말잇기 홈">
-          <img className="brand-mark" src={logo} alt="" />
-          <span className="brand-name">테이피 끝말잇기</span>
-        </a>
-        {mode && <div className="header-meta"><span className="live-dot" />{mode === "timeAttack" ? "타임어택" : "단어 데스매치"} <span className="meta-divider">/</span> 상대 테이피</div>}
-      </header>
-
-      <main id="top">
-        {!mode ? (
-          <section className="home-screen" aria-labelledby="home-title">
-            <div className="home-copy">
-              <p className="eyebrow">테이피 끝말잇기 <span>·</span> 오늘의 한 판</p>
-              <h1 id="home-title">안녕하세요끄투입니다<br /><span>잘부탁드립니다</span></h1>
-              <p>단어 하나로 시작하는 테이피와의 우리말 대결</p>
-            </div>
-            <div className="home-mode-grid" aria-label="게임 모드 선택">
-              <button className="home-mode-option" type="button" onClick={() => startNewGame("deathmatch")}>
-                <span className="home-mode-number">모드 01</span>
-                <strong>단어 데스매치</strong>
-                <span>시간 제한 없이 단어를 이어가며 테이피와 겨뤄요.</span>
-                <b aria-hidden="true">↗</b>
-              </button>
-              <button className="home-mode-option home-mode-option-time" type="button" onClick={() => startNewGame("timeAttack")}>
-                <span className="home-mode-number">모드 02 · 3초 제한</span>
-                <strong>타임어택</strong>
-                <span>나와 테이피 모두 3초 안에 다음 단어를 입력해요.</span>
-                <b aria-hidden="true">↗</b>
-              </button>
-            </div>
-            <section className="home-rules" aria-labelledby="rules-title">
-              <h2 id="rules-title">플레이 방법</h2>
-              <p><span>01</span> 두 글자 이상의 한글 단어를 입력해요.</p>
-              <p><span>02</span> 앞 단어의 마지막 글자로 다음 단어를 시작해요.</p>
-              <p><span>03</span> 이미 나온 단어는 다시 사용할 수 없어요.</p>
-            </section>
-          </section>
-        ) : (
-        <div className="game-layout">
-          <section className="play-column" aria-label="게임 진행">
-            <div className="section-heading">
-              <div><span className="section-kicker">{mode === "timeAttack" ? "3초 안에 이어가기" : "우리말 끝말잇기"}</span><h2>오늘의 한 판</h2></div>
-              <div className="section-controls">
-                <button className="mode-change-button" type="button" onClick={openModeDialog} title="모드 변경">모드 변경</button>
-                <button className="icon-button" type="button" onClick={restartGame} title="현재 모드로 새 게임" aria-label="현재 모드로 새 게임">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4.9 9a7.5 7.5 0 0 1 12.5-2L20 12M4 17v-5h5m10.1 3a7.5 7.5 0 0 1-12.5 2L4 12" /></svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="match-surface">
-              <div className="players" aria-label="현재 차례">
-                {[0, 1].map((player) => (
-                  <div className={`player ${!isFinished && currentPlayer === player ? "player-active" : ""} ${isFinished && winner === player ? "player-winner" : ""} ${isFinished && winner !== null && winner !== player ? "player-loser" : ""}`} key={player}>
-                    <span className="player-index">0{player + 1}</span>
-                    <span className="player-name">{player === 0 ? "나" : "테이피"}</span>
-                    {isFinished && winner !== null && <span className="player-result-badge">{winner === player ? "승자" : "패자"}</span>}
-                    <span className="player-score">{words.filter((_, index) => index % 2 === player).length}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className={`turn-board ${isFinished ? "turn-board-finished" : ""} ${isComputerTurn ? "turn-board-ai" : ""} ${mode === "timeAttack" && remainingMs < 1000 && !isFinished ? "turn-board-urgent" : ""}`} aria-live="polite">
-              <div className="turn-board-top">
-                <span>{isFinished ? "경기 종료" : currentPlayer === 0 ? "내 차례 · 1P" : "테이피 생각 중"}</span>
-                <span>{mode === "timeAttack" && !isFinished ? `${(remainingMs / 1000).toFixed(1)}초` : `차례 ${String(words.length + 1).padStart(2, "0")}`}</span>
-              </div>
-              {mode === "timeAttack" && !isFinished && (
-                <div
-                  className={`time-progress ${remainingMs < 1000 ? "time-progress-urgent" : ""}`}
-                  role="progressbar"
-                  aria-label="남은 시간"
-                  aria-valuemin={0}
-                  aria-valuemax={3000}
-                  aria-valuenow={remainingMs}
-                  aria-valuetext={`${(remainingMs / 1000).toFixed(1)}초 남음`}
-                  aria-live="off"
-                >
-                  <span style={{ transform: `scaleX(${remainingMs / 3000})` }} />
-                </div>
-              )}
-              {!isFinished && <div className="beat-lane" aria-hidden="true">{Array.from({ length: 12 }, (_, index) => <i key={index} />)}</div>}
-              {isFinished ? (
-                <div className="result-message">
-                  <span className="result-symbol" aria-hidden="true">{winner === null ? "!" : "★"}</span>
-                  <span className="result-label">{winner === null ? "경기 중단" : "WINNER · 승자"}</span>
-                  <strong>{winner === null ? "확인 필요" : winner === 1 ? "테이피" : "나"}</strong>
-                  {winner !== null && <span className="result-loser">패자 · {winner === 1 ? "나" : "테이피"}</span>}
-                  <span className="result-caption">{error || "기권으로 게임이 종료됐어요."}</span>
-                  <button className="result-restart-button" type="button" onClick={restartGame}>새 게임 시작 <span aria-hidden="true">↗</span></button>
-                </div>
-              ) : (
-                <div className="prompt-content">
-                  <div>
-                    <span className="prompt-label">{requiredLetter ? allowedInitials.length > 1 ? `두음법칙 적용 · ${allowedInitials.join(" · ")} 중 하나로 시작` : "이 글자로 시작" : "첫 단어를 시작하세요"}</span>
-                    <strong className={`required-letter ${requiredLetter ? "has-letter" : ""}`}>{requiredLetter ?? "?"}</strong>
-                  </div>
-                  <span className="prompt-arrow" aria-hidden="true">↘</span>
-                </div>
-              )}
-              </div>
-            </div>
-
-            {!isFinished && (
-              <WordInput
-                key={inputResetKey}
-                onSubmit={handleSubmit}
-                disabled={isComputerTurn || isModeDialogOpen || !mode}
-                error={error}
-                statusMessage={isComputerTurn ? "테이피가 단어를 고르고 있어요." : "단어를 입력하고 차례를 이어가세요."}
-              />
-            )}
-
-            <div className="play-actions">
-              <p className="rule-note"><span className="rule-mark">!</span> 두 글자 이상의 한글 단어 · 이미 나온 단어는 사용할 수 없어요</p>
-              <div className="play-action-buttons">
-                <button className="read-word-button" type="button" onClick={readLastWord} disabled={!lastWord} aria-describedby="speech-status">
-                  단어 읽기 <span aria-hidden="true">◖)</span>
-                </button>
-                {!isFinished && <button className="forfeit-button" type="button" onClick={finishByForfeit}>기권하기 <span aria-hidden="true">↗</span></button>}
-              </div>
-              <span className="sr-only" id="speech-status" role="status" aria-live="polite">{speechMessage}</span>
-            </div>
-          </section>
-
-          <aside className="history-column" aria-label="단어 기록">
-            <div className="section-heading history-heading">
-              <div><span className="section-kicker">단어 기록</span><h2>이어진 단어</h2></div>
-              <span className="word-count">{String(words.length).padStart(2, "0")}</span>
-            </div>
-            <WordList words={words} />
-            <div className="history-footer"><span>진행 상태</span><span>{words.length ? "진행 중" : "대기"}<i /></span></div>
-          </aside>
+  return <div className={`app-shell ${isFinished ? "app-results" : ""}`}>
+    <header className="site-header">
+      <button className="brand" onClick={goHome} aria-label="끝말잇기 홈"><span className="brand-mark" aria-hidden="true">↗</span><span>TAPIE<span className="brand-divider">/</span>끝말잇기</span></button>
+      {game ? <button className="text-button" onClick={goHome}>홈으로 <Arrow /></button> : <button className="text-button" onClick={() => rulesRef.current?.showModal()}>게임 방법 <span className="help-icon" aria-hidden="true">?</span></button>}
+    </header>
+    <main id="main">
+      <div className="connection-bar"><span role="status">{!ready ? dictionaryLoading || pending ? "사전 준비 중" : "사전 준비 실패" : connection.manual || !connection.connected ? "로컬 모드 · 기록은 기기에 저장" : offlineReady ? "오프라인 준비 완료" : "기기에서 플레이"}</span><button className="local-toggle" role="switch" aria-label="로컬 모드 고정" aria-checked={connection.manual} onClick={() => setLocalMode(!connection.manual)}>로컬 고정 <span aria-hidden="true">{connection.manual ? "켜짐" : "꺼짐"}</span></button></div>
+      {!game ? <section className="home-screen" aria-labelledby="home-title">
+        <div className="hero"><div className="hero-copy"><h1 id="home-title">끝말잇기.<br />내 기록은 어디까지?</h1><p>빠르게 이어갈수록, 길게 입력할수록 더 높은 점수.</p><button className="button-dark primary-start" onClick={() => { void startGame() }} disabled={pending || dictionaryLoading}>{pending || dictionaryLoading ? "사전 준비 중" : !ready ? "사전 다시 준비" : "시작하기"}<Arrow /></button>{error && <p className="word-error" role="alert">{error}</p>}</div>
+          <div className="word-art" aria-hidden="true"><div className="art-word art-word-first"><span>사</span><span className="art-dark">과</span></div><span className="art-connector">↘</span><div className="art-word art-word-second"><span className="art-outline">과</span><span className="art-dark">일</span></div><span className="art-connector art-connector-second">↘</span><div className="art-word art-word-third"><span className="art-outline">일</span><span>기</span></div></div>
         </div>
-        )}
-      </main>
-
-      <footer className="site-footer"><span>테이피 끝말잇기 <b>·</b> 01</span><span>이어갈 단어를 입력해 리듬을 이어가세요.</span></footer>
-      {isModeDialogOpen && (
-        <div className="mode-overlay">
-          <section className="mode-dialog" role="dialog" aria-modal="true" aria-labelledby="mode-title">
-            <span className="mode-kicker">테이피 끝말잇기 · 모드 선택</span>
-            <h2 id="mode-title">어떤 모드로<br />이어볼까요?</h2>
-            <p className="mode-intro">플레이 모드를 선택하면 바로 시작해요.</p>
-            <div className="mode-options">
-              <button className="mode-option" type="button" onClick={() => startNewGame("deathmatch")}>
-                <span className="mode-number">모드 01</span>
-                <strong>단어 데스매치</strong>
-                <span>차례를 이어가며 상대가 막힐 때까지 대결</span>
-                <b aria-hidden="true">↗</b>
-              </button>
-              <button className="mode-option mode-option-time" type="button" onClick={() => startNewGame("timeAttack")}>
-                <span className="mode-number">모드 02 · 3초 제한</span>
-                <strong>타임어택</strong>
-                <span>나와 테이피 모두 차례마다 3초 안에 입력</span>
-                <b aria-hidden="true">↗</b>
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-    </div>
-  )
+        <RankingList />
+      </section> : isFinished ? <ResultScreen game={data!} registered={registered} nickname={nickname} phone={phone} pending={pending} error={error} onNickname={(value) => { setNickname(value); setError("") }} onPhone={(value) => { setPhone(value); setError("") }} onRegister={(event) => { void registerRanking(event) }} onRestart={() => { void startGame() }} onHome={goHome} /> : <section className="game-screen" aria-labelledby="game-title">
+        <div className="game-heading"><h1 id="game-title">끝말잇기<span className="round-label">라운드 {String(data!.rounds + 1).padStart(2, "0")}</span></h1><button className="text-button" disabled={pending} onClick={() => { void startGame() }}>새 게임 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 5v6h-6M20 11a8 8 0 1 0-1 6" /></svg></button></div>
+        <div className="game-layout"><div className="play-column">
+          <div className="scoreboard survival-score" aria-label="현재 점수"><span>내 점수</span><strong aria-live="polite">{data!.score.toLocaleString()}<span>점</span></strong>{data!.lastGain !== 0 && <span className="score-gain" key={data!.revision}>{data!.lastGain > 0 ? "+" : ""}{data!.lastGain}</span>}<span className="bot-opponent">상대 테이피</span></div>
+          {breakdown && <p className="score-details">글자 {breakdown.lengthPoints} · 길이 보너스 {breakdown.lengthBonus} · 시간 {breakdown.timePoints} · 연속 {breakdown.comboPoints}</p>}
+          <div className={`game-board ${isFinished ? "game-board-finished" : ""} ${remainingMs <= 3000 && !isFinished && !pending ? "game-board-urgent" : ""}`}>
+            <div className="board-top"><span className="turn-status" role="status">{isFinished ? "경기 종료" : pending ? "테이피 생각 중" : "내 차례"}{pending && <span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span>}</span>{!isFinished && <span className="timer" aria-label={`제한 시간 ${data!.turnDurationMs / 1000}초`}><strong aria-hidden="true">{(remainingMs / 1000).toFixed(1)}</strong><span aria-hidden="true">초</span></span>}</div>
+            {<div className="word-prompt"><p>{requiredLetter ? "이 글자로 이어주세요" : "어떤 단어든 좋아요"}</p><strong className={requiredLetter ? "required-letter" : "first-word"}>{requiredLetter ?? "첫 단어"}</strong>{allowedInitials.length > 1 && <span className="allowed-initials">{allowedInitials.join(" · ")} 시작 가능</span>}{lastWord && <div className="previous-word"><span>이전 단어</span><strong>{lastWord}</strong><button onClick={readLastWord} aria-label={`이전 단어 ${lastWord} 읽기`}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m11 5-5 4H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" /></svg></button></div>}</div>}
+            {!isFinished && <div className="time-track" role="progressbar" aria-label="남은 시간" aria-valuemin={0} aria-valuemax={data!.turnDurationMs} aria-valuenow={Math.ceil(remainingMs)} aria-valuetext={`${(remainingMs / 1000).toFixed(1)}초 남음`}><span style={{ transform: `scaleX(${remainingMs / data!.turnDurationMs})` }} /></div>}
+          </div>
+          {!isFinished && <WordInput key={data!.id} onSubmit={handleSubmit} disabled={!ready || pending || remainingMs === 0} error={error} remainingMs={remainingMs} streak={data!.streak} onEdit={() => setError("")} />}
+          <div className="game-actions">{!isFinished && <><span className="pace-note">{data!.turnDurationMs > 3000 ? `${2 - data!.rounds % 2}라운드 뒤 ${Math.max(3, data!.turnDurationMs / 1000 - 2)}초` : "최종 속도 · 3초"}</span><button className="text-button muted-button" disabled={pending} onClick={() => { void finishGame("forfeit") }}>기권하기</button></>}</div>
+        </div><aside className="history-column" aria-labelledby="history-title"><div className="history-heading"><h2 id="history-title">이어진 단어</h2><span>{words.length}</span></div><WordList words={words} /></aside></div>
+      </section>}
+    </main>
+    <dialog className="rules-dialog" ref={rulesRef} aria-labelledby="rules-title" onClick={(event) => { if (event.target === event.currentTarget) rulesRef.current?.close() }}><div className="dialog-heading"><h2 id="rules-title">게임 방법</h2><button className="close-button" onClick={() => rulesRef.current?.close()} aria-label="게임 방법 닫기">×</button></div><ol><li>두 글자 이상의 한글 단어를 입력하세요.</li><li>앞 단어의 마지막 글자로 이어주세요. 중복과 한방 단어는 사용할 수 없어요.</li><li>글자당 10점 + 긴 단어 보너스(최대 40점) + 남은 시간 0.1초당 1점 + 연속 성공 보너스(최대 30점)가 쌓여요.</li><li>오답은 15점 + 현재 연속 성공당 3점(최대 45점)을 감점하고 연속 성공을 초기화해요. 시간은 늘어나지 않아요.</li><li>한 번 준비하면 인터넷 없이도 플레이할 수 있어요. 로컬 모드에서 저장한 기록은 연결이 돌아오면 자동 등록돼요.</li></ol><p>12초로 시작해 2라운드마다 2초씩, 최소 3초까지 줄어들어요. 테이피는 반드시 답하니 끝까지 버티며 최고 점수에 도전하세요.</p><button className="button-dark" onClick={() => rulesRef.current?.close()}>알겠어요 <Arrow /></button></dialog>
+  </div>
 }
 
 export default App

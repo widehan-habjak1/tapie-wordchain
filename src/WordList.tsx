@@ -1,33 +1,20 @@
-type Props = {
-    words: string[]
-}
+const WordList = ({ words }: { words: string[] }) => {
+  if (!words.length) return <div className="empty-history"><span aria-hidden="true">↗</span><p>첫 단어를 기다려요.</p></div>
 
-const WordList = ({ words }: Props) => {
-    if (words.length === 0) {
+  return (
+    <ol className="word-list" reversed aria-label="최근 단어부터 표시">
+      {[...words].reverse().map((word, reverseIndex) => {
+        const index = words.length - reverseIndex - 1
         return (
-            <div className="empty-history">
-                <span className="empty-symbol" aria-hidden="true">✳</span>
-                <p>아직 이어진 단어가 없어요.</p>
-                <span>첫 단어를 적어 게임을 시작하세요.</span>
-            </div>
+          <li className={`word-entry ${reverseIndex === 0 ? "word-entry-latest" : ""}`} key={`${index}-${word}`}>
+            <span className="entry-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+            <strong className="entry-word">{word.slice(0, -1)}<span>{word.at(-1)}</span></strong>
+            <span className="entry-player">{index % 2 === 0 ? "나" : "테이피"}</span>
+          </li>
         )
-    }
-
-    return (
-        <ol className="word-list">
-            {[...words].reverse().map((word, reverseIndex) => {
-                const index = words.length - reverseIndex - 1
-                const nextWord = words[index + 1]
-                return (
-                    <li className="word-entry" key={`${index}-${word}`}>
-                        <span className={`entry-player ${index % 2 === 1 ? "entry-player-ai" : ""}`}>{index % 2 === 0 ? "나" : "테이피"}</span>
-                        <span className="entry-word">{word}</span>
-                        <span className="entry-ending">{nextWord ? `${word[word.length - 1]} →` : "최신"}</span>
-                    </li>
-                )
-            })}
-        </ol>
-    )
+      })}
+    </ol>
+  )
 }
 
 export default WordList

@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tapie-wordchain",
+  "account_id": "878fc00d63cdbe157e42286411f02f32",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tapie-wordchain-ranking",
+      "database_id": "676f9175-d40b-4504-ad1d-c0ecd02a8c01",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

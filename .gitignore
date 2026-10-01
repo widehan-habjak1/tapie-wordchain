@@ -23,3 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+.wrangler
+.dev.vars*
+worker/generated/
+public/dictionary.json
+public/dictionary-v*.json

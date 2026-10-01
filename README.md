@@ -1,88 +1,95 @@
-# TAPIE Word Club
+# 끝말잇기
 
-끝말잇기 게임입니다. `korean_kr.sql`의 한글 명사를 서버 시작 시 읽어 첫 글자별로 인덱싱하고, `/api/computer-word`가 아직 사용하지 않은 이어쓰기 단어를 무작위로 반환합니다. 별도의 MySQL 서버 없이 SQL 덤프를 데이터 원본으로 사용합니다.
+테이피 봇과 단어를 이어가며 점수를 쌓는 흑백 끝말잇기 게임입니다. Cloudflare Worker가 화면과 랭킹 API를 제공하고, Cloudflare D1에 기록을 저장합니다. 사전과 봇은 기기에서 실행해 연결이 끊겨도 게임이 계속됩니다.
 
-## Run
+배포: https://tapie-wordchain.pixelhize.workers.dev
+
+## 게임 규칙과 점수
+
+- 제한 시간은 **12 → 10 → 8 → 6 → 4 → 3초**입니다. 성공 두 번마다 2초씩 줄어들고 최소 3초를 유지합니다. 오답은 제한 시간을 늘리거나 다음 라운드로 넘어가지 않습니다.
+- 두 글자 이상의 사전 단어만 인정합니다. 마지막 글자와 표시된 두음법칙으로 이어야 하며 중복과 한방 단어를 거절합니다. 봇은 받아들여진 단어에 반드시 답하고, 시간 초과·기권으로 항상 봇이 승리합니다.
+- 성공 점수는 네 항목의 합입니다. 글자 수는 NFC 정규화 후 계산합니다.
+
+| 항목 | 계산 |
+| --- | --- |
+| 글자 | 글자 수 × 10 |
+| 긴 단어 | (글자 수 − 2)² × 2, 최대 40 |
+| 시간 | 제출할 때 남은 시간 0.1초당 1점, 소수는 버림 |
+| 연속 성공 | 직전 연속 성공 수 × 3, 최대 30 |
+
+예를 들어 직전 연속 성공이 3회이고 4글자 단어를 8.4초 남았을 때 내면 `40 + 8 + 84 + 9 = 141점`입니다. 입력 중 예상 점수와 제출 후 실제 내역을 표시합니다.
+
+오답은 **15 + 직전 연속 성공 수 × 3점(최대 45점)**을 차감하고 연속 성공을 초기화합니다. 점수는 0 아래로 내려가지 않으며, 오답 뒤 입력칸은 비워집니다. 형식 오류, 사전 미등록, 이어지지 않는 단어, 중복, 한방 단어 모두 같은 규칙입니다.
+
+종료하면 점수와 함께 **닉네임·전화번호 등록 화면**이 바로 표시됩니다. 0점 기록도 등록할 수 있습니다. 닉네임은 한글·영문·숫자·밑줄·공백 1~12자입니다. 전화번호는 구분 기호를 정리한 숫자 9~15자리로 저장하고 국제번호의 `+`도 허용합니다. 전체 상위 20개 기록을 점수순으로 표시하고 동점에서는 서버 등록 시간이 빠른 기록이 먼저입니다.
+
+큰 화면(폭 760px·높이 640px 이상)에서는 홈·게임·등록 화면을 화면 높이에 맞춥니다. 긴 랭킹과 단어 목록은 각 영역 안에서 스크롤하고 페이지 전체는 늘어나지 않습니다. 좁은 모바일 화면에서는 등록 폼을 세로로 배치해 입력 요소를 가리지 않습니다.
+
+전화번호는 `ranking_contacts`에 별도 저장하고 랭킹·게임 조회 API 응답에는 포함하지 않습니다. 오프라인 등록 대기 중에만 기기의 IndexedDB에 연락처를 보관하고, 서버 등록 완료 후에는 로컬 대기 기록에서 전화번호를 제거합니다. 연락처 조회용 공개 API는 제공하지 않습니다. 기존 랭킹과 전화번호 없는 종료 기록은 유지되며, 미전송 기록은 등록 화면에서 전화번호를 추가해 완료할 수 있습니다.
+
+## 오프라인 모드
+
+처음 한 번은 접속해 화면의 **오프라인 준비 완료** 표시를 확인합니다. Service Worker가 화면·스크립트·스타일·사전을 저장합니다. 사전은 JSON 구조를 검증한 뒤 캐시하고 잘못된 캐시는 자동으로 삭제해 다시 받습니다. 캐시 저장 실패도 현재 페이지의 플레이를 막지 않습니다. 이후 연결이 끊겨도 새로고침, 새 게임, 단어 판정, 봇 응답, 점수 계산, 종료가 동작합니다. 개발 서버에서는 화면 캐싱을 사용하지 않으므로 오프라인 새로고침은 `npm run build` 후 `npm run preview`나 배포 사이트에서 확인합니다.
+
+- 상단 **로컬 고정**을 켜면 연결 중에도 랭킹 요청을 멈추고 기기에서 플레이합니다. 끄면 저장한 기록을 전송합니다. 실제 연결 실패도 자동으로 로컬 표시로 바뀌며 게임을 멈추지 않습니다.
+- 현재 게임을 로컬 저장소에 보관합니다. 새로고침해도 진행 상태를 복구하고 제한 시간은 계속 흐릅니다.
+- 닉네임·전화번호 등록은 먼저 IndexedDB에 저장합니다. 인터넷이 없으면 등록 대기로 표시하고, 페이지가 열릴 때·재연결 시·30초마다 전송을 재시도합니다. 페이지를 닫았으면 다시 열었을 때 전송합니다.
+- Worker는 성공·오답·경과 시간 기록을 같은 사전과 결정적 봇으로 재실행하여 점수를 계산합니다. 클라이언트가 보내는 점수·봇 답은 받지 않습니다. 같은 게임 UUID는 한 번만 등록돼 응답 유실 후 재전송도 중복되지 않습니다.
+- 전체 랭킹의 마지막 조회 결과와 전송 대기 중인 로컬 기록을 연결 없이도 보여줍니다. 대기 기록에는 아직 전역 순위를 부여하지 않습니다.
+
+브라우저가 사이트 데이터를 지우거나 저장을 금지하면 오프라인 화면·미전송 기록 보관은 유지되지 않습니다. 로그인 없는 오프라인 게임의 경과 시간은 기기가 보고하므로 Worker의 재검증이 실제 플레이 시간이나 닉네임 소유권을 증명하지는 않습니다. 온라인·오프라인에 같은 게임 규칙을 사용하며 시간 검증이 필요한 대회용 인증 시스템은 포함하지 않습니다.
+
+## 개발과 검증
+
+Node.js 24 이상을 사용합니다.
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
-프로덕션 실행은 먼저 `npm run build`를 실행한 뒤 `npm start`를 사용합니다. 기본 주소는 개발 모드 `http://localhost:5173`, 프로덕션 `http://localhost:4173`입니다.
+사전 생성과 로컬 D1 마이그레이션이 자동 실행되고 `http://localhost:5187`에서 Cloudflare 런타임으로 실행합니다. 별도 Node API 서버는 없습니다.
 
-## React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```sh
+npm test
+npm run lint
+npm run build
+npm run preview -- --port 5188
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+테스트는 실제 SQLite 스키마로 점수·감점·시간 단계·봇·재전송·랭킹을 검증합니다. 네트워크 없이 진행하는 게임과 결정적 재실행, 잘못된 시간 기록 거절, 오프라인 대기 기록의 재연결 전송도 검증합니다. 브라우저에서는 프리뷰 서버를 실제 종료한 뒤 새로고침·게임·닉네임 저장을 확인하고, 서버를 다시 실행해 자동 등록을 확인했습니다.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Cloudflare 배포
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+`wrangler.jsonc`에 Worker와 전용 D1이 연결돼 있습니다. 인증은 Git에 저장하지 않고 Wrangler 로그인 세션이나 `CLOUDFLARE_API_TOKEN`을 사용합니다.
 
+```sh
+npx wrangler login
+npm run db:migrate:remote
+npm run deploy
 ```
+
+다른 계정에 배포할 때 `account_id`를 바꾸고 `npm run db:create`로 전용 D1을 만든 뒤 반환된 `database_id`를 설정합니다. 마이그레이션과 배포를 실행합니다. `.dev.vars`, `.wrangler`, 생성 사전, 빌드 산출물은 Git에서 제외됩니다.
+
+정적 화면과 API 구성은 [Cloudflare React SPA 가이드](https://developers.cloudflare.com/workers/vite-plugin/tutorial/), [정적 에셋 설정](https://developers.cloudflare.com/workers/static-assets/binding/), [D1 마이그레이션](https://developers.cloudflare.com/d1/reference/migrations/)을 따릅니다. 오프라인 화면 캐시는 [Service Worker 문서](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API/Using_Service_Workers)를 참고하세요.
+
+## 단어 데이터와 API
+
+사전은 **402,553개**입니다. 기존 221,796개에 끄투 공개 데이터의 게임·포켓몬·노래·영화·문학 등 인정 주제어 45,115개와 Open Korean Text의 일반 명사·고유명사·위키 제목 명사 135,643개를 추가하고, 기존 목록에 잘못 재포함된 북한어 1개도 제거했습니다. 중복과 북한어를 제외하고 NFC 한글 2~100자만 포함합니다. 등록된 단어라도 다음 단어를 이을 수 없으면 기존 한방 단어 규칙으로 거절합니다.
+
+빌드 시 `korean_kr.sql`, `kkutu_words.txt`, `kkutu_excluded_words.txt`, `kkutu_extended_words.txt`, `open_korean_words.txt`에서 `worker/generated/words.json`과 `public/dictionary-v3.json`을 생성합니다. `public/dictionary.json`은 기존 앱의 사전으로 유지합니다. 출처·라이선스는 `THIRD_PARTY_NOTICES.md`, 원본 주소·SHA-256·단어 수는 `dictionary-sources.json`에 있습니다. Worker는 런타임에서 파일시스템이나 MySQL을 사용하지 않습니다.
+
+```sh
+# 고정된 공개 원본에서 보강 목록 재생성 (인터넷 필요)
+npm run dictionary:update
+# 다운로드한 KKuTu SQL을 사용할 수도 있습니다.
+npm run dictionary:update -- /path/to/KKuTu/db.sql
+```
+
+일반 개발·빌드는 Git에 포함된 목록만 사용하므로 사전 원본 사이트에 접속하지 않습니다. 끄투 원본의 공개 인정 주제를 따르며 비공개 끄투코리아 실시간 사전과의 완전 일치를 의미하지 않습니다.
+
+- `POST /api/local-ranking`: 종료된 로컬 경기 기록을 재검증하고 닉네임·전화번호로 등록
+- `GET /api/rankings`: 전체 상위 20개
+- 기존 서버 세션 API(`/api/games`, `/api/games/:id`, `words`, `finish`, `ranking`)도 유지합니다. 점수·감점은 같은 규칙이고 차례 번호를 조건으로 갱신해 중복 요청을 막습니다.
+
+공유 규칙·사전 버전은 `shared/dictionary-version.ts`에 있습니다. 새 게임은 버전 3을 사용하고, 기존 진행 경기·미전송 기록은 버전 2 사전으로 복구·재검증해 봇 응답과 점수가 바뀌지 않습니다. 기존 사전 순서의 해시와 확장 사전의 앞부분 일치를 테스트로 고정합니다. 사전 URL과 기기 캐시도 버전별로 분리하고 Service Worker에 두 버전 모두 포함합니다. Service Worker는 빌드 콘텐츠별 캐시를 사용하고 업데이트 시 바로 전 버전의 화면도 한 세대 보존합니다.

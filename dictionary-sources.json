@@ -1,0 +1,59 @@
+{
+  "legacyWords": 221796,
+  "removedLegacyWords": [
+    "조게"
+  ],
+  "kkutuAdded": 45115,
+  "openKoreanAdded": 135643,
+  "totalWords": 402553,
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/JJoriping/KKuTu/a2c240bc31fe2dea31d26fb1cf7625b4645556a6/db.sql",
+      "sha256": "4fcc7648ed8eed8efe6432422131dff96c4923b8b4bd8974f8cdce3ec8f21426"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/nouns.txt",
+      "sha256": "06b5abbe9e69eb3ffa1cb971fe69cea43940be9d9e859f4a51bdfc72e6f9001f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/entities.txt",
+      "sha256": "a9253f14b55d7ae41194a3d66c15294c5d4b681d6ed16b8762f53bffe5a922ca"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/foreign.txt",
+      "sha256": "328418a1bbaccbc4b487f1ee066d5e0e4d74b04de9f590e5854f4177b99efb37"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/fashion.txt",
+      "sha256": "6a02bb112d06c652a8011c8617dfc609abf09274772cfc8a6e25daf91b40f186"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/brand.txt",
+      "sha256": "da6183cd1f4938d3a6657d6a6cb4751711ecaf0385583ab00a5783595a9e5076"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/company_names.txt",
+      "sha256": "4394116e8043f32ca5633e82efe9a263ff4e6771d27bfb4e857d0a437f30e3dc"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/geolocations.txt",
+      "sha256": "4b125db66516e753f7af8fd4a62ef2b870aea1f7ee35912450303c84fe628993"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/kpop.txt",
+      "sha256": "6c5272fe9ecc09ad943a7ef9cfc307defbff401ed072ae8395076ff6ef456f68"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/lol.txt",
+      "sha256": "54a62672d268ac0ff65365a1b99e8781c50bee5961c518feef44298f7fed253f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/pokemon.txt",
+      "sha256": "1ca672ef87ac96706a6ed29966121ad5eaf749274839a7102c2d305d9374bcb9"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/open-korean-text/open-korean-text/74cc4ae7d3dab232747cd5ddb723e4b73c476e4f/src/main/resources/org/openkoreantext/processor/util/noun/wikipedia_title_nouns.txt",
+      "sha256": "323faeb037ad105322775fd919cbe7d6698820b4a0303df1a78f6bb0e5d78445"
+    }
+  ]
+}

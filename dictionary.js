@@ -70,11 +70,30 @@ const loadWordIndex = () => {
     index.set(initial, bucket)
   }
 
-  return { index, words, wordCount: words.size }
+  return { index, words, excluded: new Set([...northKoreanWords, ...kkutuExcludedWords]) }
 }
 
 const dictionary = loadWordIndex()
 
-export const wordsByInitial = dictionary.index
-export const dictionaryWords = dictionary.words
-export const wordCount = dictionary.wordCount
+// Keep the original order immutable: version 2 transcripts replay against this prefix.
+export const legacyDictionaryWords = dictionary.words
+export const excludedDictionaryWords = dictionary.excluded
+const expandedWords = new Set(dictionary.words)
+for (const word of dictionary.excluded) expandedWords.delete(word)
+for (const file of ["kkutu_extended_words.txt", "open_korean_words.txt"]) {
+  const content = readFileSync(new URL(file, import.meta.url), "utf8")
+  for (const line of content.split(/\r?\n/u)) {
+    const word = line.normalize("NFC")
+    if (/^[가-힣]{2,100}$/u.test(word) && !dictionary.excluded.has(word)) expandedWords.add(word)
+  }
+}
+
+const expandedIndex = new Map()
+for (const word of expandedWords) {
+  const bucket = expandedIndex.get(word[0]) ?? []
+  bucket.push(word)
+  expandedIndex.set(word[0], bucket)
+}
+export const wordsByInitial = expandedIndex
+export const dictionaryWords = expandedWords
+export const wordCount = expandedWords.size

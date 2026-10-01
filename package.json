@@ -4,17 +4,28 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node server.js --dev",
-    "build": "tsc -b && vite build",
+    "dictionary:build": "node scripts/build-dictionary.mjs",
+    "dictionary:update": "node scripts/import-word-supplements.mjs",
+    "test": "node --test tests/*.test.ts",
+    "predev": "npm run dictionary:build && npm run db:migrate:local",
+    "dev": "vite",
+    "build": "npm run dictionary:build && tsc -b && tsc -p tsconfig.worker.json && vite build && node scripts/build-offline.mjs",
     "lint": "eslint .",
-    "preview": "node server.js",
-    "start": "node server.js"
+    "preview": "vite preview",
+    "start": "vite preview",
+    "db:create": "wrangler d1 create tapie-wordchain-ranking",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:check": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.62.3",
+    "@cloudflare/workers-types": "^5.20261001.1",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
@@ -26,6 +37,7 @@
     "globals": "^17.12.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.69.0",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "wrangler": "^4.145.0"
   }
 }

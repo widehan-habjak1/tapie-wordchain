@@ -1,8 +1,0 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/*.js": {
-      "includeFiles": "{korean_kr.sql,kkutu_words.txt,kkutu_excluded_words.txt}"
-    }
-  }
-}
